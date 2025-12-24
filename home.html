@@ -1,0 +1,247 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>CSV to PostgreSQL INSERT Generator</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 1200px;
+            margin: 20px auto;
+            padding: 20px;
+            background: #f5f5f5;
+        }
+        .container {
+            background: white;
+            padding: 30px;
+            border-radius: 8px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        }
+        h1 {
+            color: #333;
+            margin-bottom: 20px;
+        }
+        textarea {
+            width: 100%;
+            min-height: 150px;
+            padding: 10px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            font-family: monospace;
+            font-size: 12px;
+            margin-bottom: 15px;
+        }
+        button {
+            background: #4CAF50;
+            color: white;
+            padding: 12px 24px;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 16px;
+            margin-right: 10px;
+        }
+        button:hover {
+            background: #45a049;
+        }
+        button.copy {
+            background: #2196F3;
+        }
+        button.copy:hover {
+            background: #0b7dda;
+        }
+        .output {
+            background: #f9f9f9;
+            padding: 15px;
+            border-radius: 4px;
+            margin-top: 20px;
+            max-height: 500px;
+            overflow-y: auto;
+        }
+        .output pre {
+            margin: 0;
+            white-space: pre-wrap;
+            word-wrap: break-word;
+            font-size: 11px;
+        }
+        .status {
+            margin-top: 10px;
+            padding: 10px;
+            border-radius: 4px;
+            display: none;
+        }
+        .status.success {
+            background: #d4edda;
+            color: #155724;
+            border: 1px solid #c3e6cb;
+        }
+        .status.error {
+            background: #f8d7da;
+            color: #721c24;
+            border: 1px solid #f5c6cb;
+        }
+        label {
+            display: block;
+            margin-bottom: 5px;
+            font-weight: bold;
+            color: #555;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>CSV to PostgreSQL INSERT Generator</h1>
+        
+        <label>Paste your CSV data here:</label>
+        <textarea id="csvInput" placeholder="Paste CSV data here..."></textarea>
+        
+        <button onclick="convertToSQL()">Generate SQL</button>
+        <button class="copy" onclick="copyToClipboard()">Copy SQL</button>
+        
+        <div id="status" class="status"></div>
+        
+        <div class="output">
+            <pre id="sqlOutput">SQL INSERT statements will appear here...</pre>
+        </div>
+    </div>
+
+    <script>
+        function convertToSQL() {
+            const csv = document.getElementById('csvInput').value.trim();
+            if (!csv) {
+                showStatus('Please paste CSV data', 'error');
+                return;
+            }
+
+            try {
+                const rows = parseCSV(csv);
+                const headers = rows[0];
+                
+                let sql = 'INSERT INTO users (\n    ' + headers.join(', ') + '\n) VALUES\n';
+                
+                const values = [];
+                for (let i = 1; i < rows.length; i++) {
+                    if (rows[i].length === 0 || (rows[i].length === 1 && !rows[i][0])) continue;
+                    
+                    const processedValues = rows[i].map((val, idx) => {
+                        const header = headers[idx];
+                        return formatValue(val, header);
+                    });
+                    
+                    values.push('(' + processedValues.join(', ') + ')');
+                }
+                
+                sql += values.join(',\n');
+                sql += ';';
+                
+                document.getElementById('sqlOutput').textContent = sql;
+                showStatus(`Generated SQL for ${values.length} records`, 'success');
+            } catch (error) {
+                showStatus('Error: ' + error.message, 'error');
+                console.error(error);
+            }
+        }
+
+        function parseCSV(text) {
+            const rows = [];
+            let currentRow = [];
+            let currentField = '';
+            let inQuotes = false;
+            
+            for (let i = 0; i < text.length; i++) {
+                const char = text[i];
+                const nextChar = text[i + 1];
+                
+                if (char === '"') {
+                    if (inQuotes && nextChar === '"') {
+                        // Escaped quote
+                        currentField += '"';
+                        i++; // Skip next quote
+                    } else {
+                        // Toggle quote state
+                        inQuotes = !inQuotes;
+                    }
+                } else if (char === ',' && !inQuotes) {
+                    // End of field
+                    currentRow.push(currentField);
+                    currentField = '';
+                } else if (char === '\n' && !inQuotes) {
+                    // End of row
+                    currentRow.push(currentField);
+                    rows.push(currentRow);
+                    currentRow = [];
+                    currentField = '';
+                } else if (char === '\r') {
+                    // Skip carriage return
+                    continue;
+                } else {
+                    // Regular character (including newlines inside quotes)
+                    currentField += char;
+                }
+            }
+            
+            // Don't forget the last field and row
+            if (currentField || currentRow.length > 0) {
+                currentRow.push(currentField);
+                rows.push(currentRow);
+            }
+            
+            return rows;
+        }
+
+        function formatValue(val, header) {
+            // Remove surrounding quotes if present
+            val = val.replace(/^"|"$/g, '').trim();
+            
+            if (val === '' || val === 'NULL') {
+                return 'NULL';
+            }
+            
+            const booleanFields = ['is_google_signup', 'is_verified', 'active', 'registration_complete', 'referral_used', 'is_admin'];
+            if (booleanFields.includes(header)) {
+                return (val === 'true' || val === '1') ? 'TRUE' : 'FALSE';
+            }
+            
+            const dateFields = ['dob', 'email_verified_at', 'created_at', 'updated_at', 'deleted_at', 'verified_at'];
+            if (dateFields.includes(header) && val) {
+                return `'${val.replace('.000', '')}'`;
+            }
+            
+            const numericFields = ['id', 'level'];
+            if (numericFields.includes(header)) {
+                return val;
+            }
+            
+            // Escape single quotes and replace newlines with spaces
+            val = val.replace(/'/g, "''").replace(/\n/g, ' ').replace(/\r/g, '');
+            return `'${val}'`;
+        }
+
+        function copyToClipboard() {
+            const sql = document.getElementById('sqlOutput').textContent;
+            if (sql === 'SQL INSERT statements will appear here...') {
+                showStatus('Generate SQL first!', 'error');
+                return;
+            }
+            
+            navigator.clipboard.writeText(sql).then(() => {
+                showStatus('SQL copied to clipboard!', 'success');
+            }).catch(err => {
+                showStatus('Failed to copy: ' + err, 'error');
+            });
+        }
+
+        function showStatus(message, type) {
+            const status = document.getElementById('status');
+            status.textContent = message;
+            status.className = 'status ' + type;
+            status.style.display = 'block';
+            
+            setTimeout(() => {
+                status.style.display = 'none';
+            }, 3000);
+        }
+    </script>
+</body>
+</html>
